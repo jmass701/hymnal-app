@@ -1,0 +1,59 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo (with LFS audio/images)
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Assemble Capacitor web assets
+        run: |
+          mkdir -p www
+          cp index.html app.js data.js sw.js manifest.json icon-192.png icon-512.png www/
+          cp -r audio images www/
+
+      - name: Create package.json and install Capacitor
+        run: |
+          npm init -y
+          npm install @capacitor/core @capacitor/cli @capacitor/android
+
+      - name: Init Capacitor project
+        run: npx cap init "Hymnal App" "com.jbwconsult.hymnalapp" --web-dir www
+
+      - name: Add Android platform
+        run: npx cap add android
+
+      - name: Copy web assets into Android project
+        run: npx cap copy android
+
+      - name: Build debug APK
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Upload APK as build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hymnal-app-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
