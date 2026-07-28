@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#7a3b2e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Hymnal">
+<title>Hymnal</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+  :root {
+    --bg: #faf6ef;
+    --paper: #ffffff;
+    --ink: #2b2320;
+    --muted: #7a6f63;
+    --accent: #7a3b2e;
+    --accent-dark: #5c2c22;
+    --line: #e6ddd0;
+    --shadow: 0 2px 8px rgba(43,35,32,0.08);
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Georgia, serif;
+  }
+  #app { display: flex; flex-direction: column; height: 100dvh; overflow: hidden; }
+
+  header {
+    flex: 0 0 auto;
+    padding: max(14px, env(safe-area-inset-top)) 16px 12px;
+    background: var(--accent);
+    color: #fff;
+    box-shadow: var(--shadow);
+    z-index: 5;
+  }
+  header h1 {
+    margin: 0 0 10px;
+    font-size: 1.15rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  header h1 .backbtn {
+    display: none;
+    background: none;
+    border: none;
+    color: #fff;
+    font-size: 1.4rem;
+    line-height: 1;
+    padding: 0 6px 0 0;
+    cursor: pointer;
+  }
+  header h1 .backbtn.show { display: inline-block; }
+
+  .searchwrap { position: relative; }
+  #search {
+    width: 100%;
+    padding: 10px 36px 10px 12px;
+    border-radius: 10px;
+    border: none;
+    font-size: 1rem;
+    background: rgba(255,255,255,0.95);
+    color: var(--ink);
+  }
+  #search:focus { outline: 2px solid #fff3; }
+  .clearbtn {
+    position: absolute;
+    right: 6px; top: 50%; transform: translateY(-50%);
+    background: none; border: none; color: var(--muted);
+    font-size: 1.1rem; padding: 6px; cursor: pointer; display: none;
+  }
+  .clearbtn.show { display: block; }
+
+  main { flex: 1 1 auto; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+
+  #listView { padding: 8px 0 24px; }
+  .hymn-row {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--line);
+    cursor: pointer;
+    background: var(--paper);
+  }
+  .hymn-row:active { background: #f1e9dd; }
+  .hymn-num {
+    flex: 0 0 auto;
+    min-width: 34px;
+    font-weight: 700;
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+  }
+  .hymn-title { flex: 1 1 auto; font-size: 1rem; }
+  .hymn-meta { font-size: 0.8rem; color: var(--muted); margin-top: 2px; }
+
+  .empty { text-align: center; color: var(--muted); padding: 48px 24px; font-size: 0.95rem; }
+
+  #detailView { display: none; padding: 20px 18px 48px; max-width: 640px; margin: 0 auto; }
+  #detailView.show { display: block; }
+  #listView.hide { display: none; }
+
+  .detail-num { color: var(--accent); font-weight: 700; font-size: 0.95rem; letter-spacing: 0.03em; }
+  .detail-title { font-size: 1.5rem; font-weight: 700; margin: 4px 0 10px; line-height: 1.25; }
+  .detail-attrib { font-size: 0.85rem; color: var(--muted); margin-bottom: 22px; line-height: 1.5; }
+  .detail-attrib div { margin-bottom: 1px; }
+
+  .hymn-nav {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    margin: 14px 0;
+  }
+  .nav-btn {
+    flex: 1 1 0;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    color: var(--accent);
+    font-weight: 600;
+    font-size: 0.85rem;
+    padding: 10px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .nav-btn:active { background: #f1e9dd; }
+  .nav-btn:disabled {
+    opacity: 0.35;
+    cursor: default;
+    background: var(--paper);
+  }
+  .nav-btn:last-child { text-align: right; }
+
+  .audio-block {
+    margin-bottom: 20px;
+    background: var(--paper);
+    border-radius: 10px;
+    box-shadow: var(--shadow);
+    padding: 12px 14px;
+  }
+  .audio-row { display: flex; flex-direction: column; gap: 6px; }
+  .audio-row + .audio-row { margin-top: 12px; }
+  .audio-label { font-size: 0.78rem; font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.04em; }
+  .audio-row audio { width: 100%; height: 36px; }
+
+  .sheet-toggle-row { margin-bottom: 10px; }
+  .sheet-toggle-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    color: var(--accent);
+    font-weight: 600;
+    font-size: 0.85rem;
+    padding: 7px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  .sheet-toggle-btn:active { background: #f1e9dd; }
+  .sheet-toggle-btn span:first-child { font-size: 0.65rem; }
+
+  .sheet-music {
+    margin-bottom: 20px;
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: var(--shadow);
+    background: #fff;
+  }
+  .sheet-music img { display: block; width: 100%; height: auto; }
+  .sheet-music.hidden { display: none; }
+
+  .verse {
+    background: var(--paper);
+    border-radius: 10px;
+    box-shadow: var(--shadow);
+    padding: 14px 16px;
+    margin-bottom: 12px;
+    display: flex;
+    gap: 12px;
+  }
+  .verse-num { flex: 0 0 auto; width: 24px; font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; }
+  .verse-text { flex: 1 1 auto; white-space: pre-line; line-height: 1.65; font-size: 1.05rem; }
+
+  footer.tabbar {
+    flex: 0 0 auto;
+    display: flex;
+    border-top: 1px solid var(--line);
+    background: var(--paper);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .tabbtn {
+    flex: 1; text-align: center; padding: 10px 0 8px; background: none; border: none;
+    color: var(--muted); font-size: 0.72rem; display: flex; flex-direction: column;
+    align-items: center; gap: 3px; cursor: pointer;
+  }
+  .tabbtn.active { color: var(--accent); font-weight: 600; }
+  .tabbtn .ic { font-size: 1.25rem; }
+
+  .jumpgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(52px, 1fr)); gap: 8px; padding: 14px 16px 24px; }
+  .jumpgrid button { padding: 10px 0; border-radius: 8px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .jumpgrid button:active { background: #f1e9dd; }
+
+  .sectionlabel { padding: 14px 16px 4px; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1><button class="backbtn" id="backBtn" aria-label="Back">&#8592;</button><span id="headerTitle">Hymnal</span></h1>
+    <div class="searchwrap" id="searchWrap">
+      <input id="search" type="text" inputmode="numeric" placeholder="Search by hymn # or title&hellip;" autocomplete="off" autocorrect="off" spellcheck="false">
+      <button class="clearbtn" id="clearBtn" aria-label="Clear">&times;</button>
+    </div>
+  </header>
+  <main>
+    <div id="listView"></div>
+    <div id="detailView"></div>
+  </main>
+  <footer class="tabbar">
+    <button class="tabbtn active" id="tabAll"><span class="ic">&#9776;</span>All Hymns</button>
+    <button class="tabbtn" id="tabJump"><span class="ic">#</span>Jump to #</button>
+  </footer>
+</div>
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
