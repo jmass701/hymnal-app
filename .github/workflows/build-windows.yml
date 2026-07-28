@@ -1,0 +1,39 @@
+name: Build Windows Installer
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repo (with LFS audio/images)
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Assemble app folder
+        shell: bash
+        run: |
+          mkdir -p electron-app/app
+          cp index.html app.js data.js sw.js manifest.json icon-192.png icon-512.png electron-app/app/
+          cp -r audio images electron-app/app/
+
+      - name: Install Electron dependencies
+        working-directory: electron-app
+        run: npm install
+
+      - name: Build Windows installer
+        working-directory: electron-app
+        run: npm run build:win
+
+      - name: Upload installer as build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hymnal-app-windows-installer
+          path: electron-app/dist/*.exe

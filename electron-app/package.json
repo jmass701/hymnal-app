@@ -1,0 +1,29 @@
+{
+  "name": "hymnal-app-desktop",
+  "version": "1.0.0",
+  "description": "Hymnal App desktop wrapper",
+  "main": "main.js",
+  "scripts": {
+    "build:win": "electron-builder --win --publish=never"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.jbwconsult.hymnalapp",
+    "productName": "Hymnal App",
+    "files": [
+      "main.js",
+      "app/**/*"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "app/icon-512.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
