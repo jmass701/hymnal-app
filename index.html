@@ -151,6 +151,21 @@
   .audio-row + .audio-row { margin-top: 12px; }
   .audio-label { font-size: 0.78rem; font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.04em; }
   .audio-row audio { width: 100%; height: 36px; }
+  .edit-tune-btn {
+    align-self: flex-end;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: none;
+    border: none;
+    color: var(--accent);
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 2px 4px;
+  }
+  .edit-tune-btn:hover { text-decoration: underline; }
+  .edit-tune-btn:disabled { opacity: 0.5; cursor: default; }
 
   .sheet-toggle-row { margin-bottom: 10px; }
   .sheet-toggle-btn {

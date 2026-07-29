@@ -83,6 +83,28 @@
     });
   }
 
+  function xmlBaseForAudio(src) {
+    var name = src.split("/").pop();
+    var dot = name.lastIndexOf(".");
+    return dot > -1 ? name.substring(0, dot) : name;
+  }
+
+  function findMusicXmlPath(base) {
+    var exts = ["xml", "musicxml", "mxl"];
+    var i = 0;
+    function tryNext() {
+      if (i >= exts.length) return Promise.resolve(null);
+      var path = "musicxml/" + base + "." + exts[i];
+      i++;
+      return fetch(encodeURI(path), { method: "HEAD" }).then(function (res) {
+        return res.ok ? path : tryNext();
+      }).catch(function () {
+        return tryNext();
+      });
+    }
+    return tryNext();
+  }
+
   function showDetail(num) {
     var h = HYMNS.find(function (x) { return x.number === num; });
     if (!h) return;
@@ -127,6 +149,7 @@
             '<div class="audio-row">' +
               '<div class="audio-label">' + label + "</div>" +
               '<audio controls preload="none" src="' + encodeURI(src) + '"></audio>' +
+              '<button class="edit-tune-btn" data-audio="' + encodeURI(src) + '" title="Edit tune (MusicXML)">&#9998; <span>Edit tune</span></button>' +
             "</div>"
           );
         }).join("") +
@@ -187,6 +210,34 @@
         document.getElementById("sheetToggleLabel").textContent = hiddenNow ? "Show sheet music" : "Hide sheet music";
       });
     }
+
+    detailView.querySelectorAll(".edit-tune-btn").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var audioSrc = decodeURI(btn.getAttribute("data-audio"));
+        var base = xmlBaseForAudio(audioSrc);
+        var original = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = "&hellip;";
+        findMusicXmlPath(base).then(function (path) {
+          btn.disabled = false;
+          btn.innerHTML = original;
+          if (path) {
+            var a = document.createElement("a");
+            a.href = encodeURI(path);
+            a.download = path.split("/").pop();
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+          } else {
+            alert(
+              "No editable MusicXML source yet for this track (" + base + ").\n\n" +
+              "Scan or export one from Audiveris/MuseScore, save it as musicxml/" + base + ".xml, " +
+              "and push it to the repo to enable one-click editing here."
+            );
+          }
+        });
+      });
+    });
 
     document.querySelector("main").scrollTop = 0;
     history.pushState({ view: "detail", num: num }, "", "#hymn-" + num);
