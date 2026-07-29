@@ -65,9 +65,10 @@ let scanServerProcess = null;
 
 function scanServerEntryPath() {
   if (app.isPackaged) {
-    // electron-builder unpacks anything matched by "asarUnpack" to a
-    // sibling folder next to app.asar, under resources/.
-    return path.join(process.resourcesPath, 'app.asar.unpacked', 'scan2notes-server', 'server.js');
+    // Bundled via electron-builder's "extraResources", which copies this
+    // folder (including its node_modules, unlike files/asarUnpack) as
+    // plain files directly under resources/.
+    return path.join(process.resourcesPath, 'scan2notes-server', 'server.js');
   }
   return path.join(__dirname, 'scan2notes-server', 'server.js');
 }
