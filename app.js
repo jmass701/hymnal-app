@@ -105,6 +105,61 @@
     return tryNext();
   }
 
+  function downloadFromUrl(url, filename) {
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }
+
+  function downloadText(text, filename) {
+    var blob = new Blob([text], { type: "application/vnd.recordare.musicxml+xml" });
+    var url = URL.createObjectURL(blob);
+    downloadFromUrl(url, filename);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+  }
+
+  // Local Scan2Notes server (Audiveris OMR) -- only reachable when the
+  // user has it running on their own machine via start.bat. Not part of
+  // the deployed static app; this is a best-effort convenience call.
+  var SCAN2NOTES_BASE = "http://localhost:3000";
+
+  function scanSheetMusicForXml(sheetSrc) {
+    return fetch(encodeURI(sheetSrc))
+      .then(function (res) {
+        if (!res.ok) throw new Error("Could not load the sheet music image (" + sheetSrc + ")");
+        return res.blob();
+      })
+      .then(function (blob) {
+        var form = new FormData();
+        var filename = sheetSrc.split("/").pop();
+        form.append("sheet", blob, filename);
+        return fetch(SCAN2NOTES_BASE + "/api/scan", { method: "POST", body: form });
+      })
+      .then(function (res) {
+        return res.json().catch(function () { return {}; }).then(function (data) {
+          if (!res.ok) {
+            return { error: data.error || ("Scan2Notes server returned " + res.status), detail: data.detail };
+          }
+          return { musicxmlUrl: data.musicxmlUrl };
+        });
+      })
+      .then(function (result) {
+        if (result.error) return result;
+        return fetch(SCAN2NOTES_BASE + result.musicxmlUrl).then(function (res2) {
+          if (!res2.ok) throw new Error("Scan finished but the resulting MusicXML couldn't be retrieved");
+          return res2.text();
+        }).then(function (xmlText) {
+          return { xmlText: xmlText };
+        });
+      })
+      .catch(function (err) {
+        return { error: err.message };
+      });
+  }
+
   function showDetail(num) {
     var h = HYMNS.find(function (x) { return x.number === num; });
     if (!h) return;
@@ -218,23 +273,41 @@
         var original = btn.innerHTML;
         btn.disabled = true;
         btn.innerHTML = "&hellip;";
+
         findMusicXmlPath(base).then(function (path) {
-          btn.disabled = false;
-          btn.innerHTML = original;
           if (path) {
-            var a = document.createElement("a");
-            a.href = encodeURI(path);
-            a.download = path.split("/").pop();
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-          } else {
-            alert(
-              "No editable MusicXML source yet for this track (" + base + ").\n\n" +
-              "Scan or export one from Audiveris/MuseScore, save it as musicxml/" + base + ".xml, " +
-              "and push it to the repo to enable one-click editing here."
-            );
+            btn.disabled = false;
+            btn.innerHTML = original;
+            downloadFromUrl(encodeURI(path), path.split("/").pop());
+            return;
           }
+
+          // No corrected MusicXML committed yet -- try auto-scanning
+          // this hymn's existing sheet-music image via a Scan2Notes
+          // server running locally on this machine.
+          var sheetSrc = h.sheetMusic && h.sheetMusic[0];
+          if (!sheetSrc) {
+            btn.disabled = false;
+            btn.innerHTML = original;
+            alert("No sheet music image found for this hymn to scan.");
+            return;
+          }
+
+          btn.innerHTML = "Scanning\u2026";
+          scanSheetMusicForXml(sheetSrc).then(function (result) {
+            btn.disabled = false;
+            btn.innerHTML = original;
+            if (result && result.xmlText) {
+              downloadText(result.xmlText, base + ".musicxml");
+            } else {
+              alert(
+                "Couldn't auto-scan this hymn's sheet music.\n\n" +
+                (result && result.error ? result.error + "\n\n" : "") +
+                "Make sure your Scan2Notes server is running locally (start.bat) at " + SCAN2NOTES_BASE + ", " +
+                "then try again \u2014 or scan/export manually in Audiveris/MuseScore and save the result as musicxml/" + base + ".xml, then push it to the repo."
+              );
+            }
+          });
         });
       });
     });
