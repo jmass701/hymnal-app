@@ -36,6 +36,25 @@ function startServer(root, port) {
   }).listen(port, '127.0.0.1');
 }
 
+// --- Diagnostic log file --------------------------------------------------
+// Packaged Electron apps have no visible console, so write a plain text
+// log next to the user's data folder that can be opened in Notepad to
+// see what actually happened with the bundled Scan2Notes server.
+const logPath = path.join(app.getPath('userData'), 'scan2notes-debug.log');
+
+function log(line) {
+  const stamped = '[' + new Date().toISOString() + '] ' + line + '\n';
+  try {
+    fs.appendFileSync(logPath, stamped);
+  } catch (e) {
+    // best effort only
+  }
+}
+
+log('--- Hymnal App starting, isPackaged=' + app.isPackaged + ' ---');
+log('resourcesPath: ' + process.resourcesPath);
+log('__dirname: ' + __dirname);
+
 // --- Scan2Notes (Audiveris OMR) background server -----------------------
 // Bundled alongside the app so "Edit Tune" can auto-scan sheet music
 // without the user separately starting a server by hand. Still requires
@@ -55,27 +74,49 @@ function scanServerEntryPath() {
 
 function startScanServer() {
   const serverPath = scanServerEntryPath();
+  log('Looking for Scan2Notes server at: ' + serverPath);
+  log('Exists: ' + fs.existsSync(serverPath));
+
   if (!fs.existsSync(serverPath)) {
-    console.warn('Scan2Notes server not found at', serverPath, '-- Edit Tune auto-scan will be unavailable.');
+    log('Scan2Notes server file not found -- auto-scan will be unavailable.');
+    // Log what IS actually in the resources folder, to see if bundling
+    // put things somewhere unexpected.
+    try {
+      const resDir = process.resourcesPath;
+      log('Contents of resourcesPath: ' + JSON.stringify(fs.readdirSync(resDir)));
+      const unpackedDir = path.join(resDir, 'app.asar.unpacked');
+      if (fs.existsSync(unpackedDir)) {
+        log('Contents of app.asar.unpacked: ' + JSON.stringify(fs.readdirSync(unpackedDir)));
+      } else {
+        log('app.asar.unpacked directory does not exist at all.');
+      }
+    } catch (e) {
+      log('Error inspecting resources directory: ' + e.message);
+    }
     return;
   }
+
   try {
     scanServerProcess = fork(serverPath, [], {
       cwd: path.dirname(serverPath),
       env: Object.assign({}, process.env, { PORT: '3000' }),
-      stdio: 'ignore'
+      stdio: ['ignore', 'pipe', 'pipe', 'ipc']
     });
+
+    scanServerProcess.stdout.on('data', (data) => log('[scan2notes stdout] ' + data.toString().trim()));
+    scanServerProcess.stderr.on('data', (data) => log('[scan2notes stderr] ' + data.toString().trim()));
+
     scanServerProcess.on('error', (err) => {
-      console.error('Scan2Notes server failed to start:', err);
+      log('Scan2Notes server failed to start (spawn error): ' + err.message);
     });
-    scanServerProcess.on('exit', (code) => {
-      if (code !== 0 && code !== null) {
-        console.warn('Scan2Notes server exited with code', code, '(port 3000 may already be in use by another instance, which is fine)');
-      }
+    scanServerProcess.on('exit', (code, signal) => {
+      log('Scan2Notes server exited. code=' + code + ' signal=' + signal);
       scanServerProcess = null;
     });
+
+    log('Scan2Notes server fork() called, pid=' + (scanServerProcess.pid || 'unknown'));
   } catch (err) {
-    console.error('Could not launch Scan2Notes server:', err);
+    log('Could not launch Scan2Notes server (exception): ' + err.message);
   }
 }
 
