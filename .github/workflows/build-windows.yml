@@ -24,6 +24,10 @@ jobs:
           cp index.html app.js data.js sw.js manifest.json icon-192.png icon-512.png electron-app/app/
           cp -r audio images electron-app/app/
 
+      - name: Install Scan2Notes server dependencies (bundled for Edit Tune auto-scan)
+        working-directory: electron-app/scan2notes-server
+        run: npm install --omit=dev
+
       - name: Install Electron dependencies
         working-directory: electron-app
         run: npm install

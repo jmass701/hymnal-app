@@ -15,7 +15,11 @@
     "productName": "Hymnal App",
     "files": [
       "main.js",
-      "app/**/*"
+      "app/**/*",
+      "scan2notes-server/**/*"
+    ],
+    "asarUnpack": [
+      "scan2notes-server/**/*"
     ],
     "win": {
       "target": "nsis",

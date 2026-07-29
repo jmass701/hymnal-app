@@ -303,8 +303,9 @@
               alert(
                 "Couldn't auto-scan this hymn's sheet music.\n\n" +
                 (result && result.error ? result.error + "\n\n" : "") +
-                "Make sure your Scan2Notes server is running locally (start.bat) at " + SCAN2NOTES_BASE + ", " +
-                "then try again \u2014 or scan/export manually in Audiveris/MuseScore and save the result as musicxml/" + base + ".xml, then push it to the repo."
+                "If you're using the Windows app, make sure Audiveris (and optionally Ghostscript) is installed with AUDIVERIS_HOME set, then try again. " +
+                "If you're using this in a web browser instead of the Windows app, the auto-scan service only runs inside the desktop app \u2014 " +
+                "scan/export manually in Audiveris/MuseScore instead and save the result as musicxml/" + base + ".xml, then push it to the repo."
               );
             }
           });

@@ -1,0 +1,20 @@
+{
+  "name": "scan2notes-starter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Minimal Audiveris-backed scan-to-notes pipeline: upload -> OMR -> MusicXML -> render/playback",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "multer": "^1.4.5-lts.1",
+    "pdf-lib": "^1.17.1",
+    "sharp": "^0.33.5",
+    "adm-zip": "^0.5.16"
+  },
+  "allowScripts": {
+    "sharp@0.33.5": true
+  }
+}
