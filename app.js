@@ -149,7 +149,7 @@
             '<div class="audio-row">' +
               '<div class="audio-label">' + label + "</div>" +
               '<audio controls preload="none" src="' + encodeURI(src) + '"></audio>' +
-              '<button class="edit-tune-btn" data-audio="' + encodeURI(src) + '" title="Edit tune (MusicXML)">&#9998; <span>Edit tune</span></button>' +
+              (src.indexOf("organ_") !== -1 ? '<button class="edit-tune-btn" data-audio="' + encodeURI(src) + '" title="Edit tune (MusicXML)">&#9998; <span>Edit tune</span></button>' : "") +
             "</div>"
           );
         }).join("") +
