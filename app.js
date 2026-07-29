@@ -126,18 +126,12 @@
   // the deployed static app; this is a best-effort convenience call.
   var SCAN2NOTES_BASE = "http://localhost:3000";
 
-  function scanSheetMusicForXml(sheetSrc) {
-    return fetch(encodeURI(sheetSrc))
-      .then(function (res) {
-        if (!res.ok) throw new Error("Could not load the sheet music image (" + sheetSrc + ")");
-        return res.blob();
-      })
-      .then(function (blob) {
-        var form = new FormData();
-        var filename = sheetSrc.split("/").pop();
-        form.append("sheet", blob, filename);
-        return fetch(SCAN2NOTES_BASE + "/api/scan", { method: "POST", body: form });
-      })
+  function scanSheetMusicForXml(hymnNumber) {
+    // Scans the ORIGINAL high-resolution sheet music PDF for this hymn
+    // (looked up locally by the Scan2Notes server, by number) rather
+    // than uploading the small in-app display image, which is too
+    // low-resolution for Audiveris to read reliably.
+    return fetch(SCAN2NOTES_BASE + "/api/scan-by-number/" + hymnNumber, { method: "POST" })
       .then(function (res) {
         return res.json().catch(function () { return {}; }).then(function (data) {
           if (!res.ok) {
@@ -282,19 +276,12 @@
             return;
           }
 
-          // No corrected MusicXML committed yet -- try auto-scanning
-          // this hymn's existing sheet-music image via a Scan2Notes
-          // server running locally on this machine.
-          var sheetSrc = h.sheetMusic && h.sheetMusic[0];
-          if (!sheetSrc) {
-            btn.disabled = false;
-            btn.innerHTML = original;
-            alert("No sheet music image found for this hymn to scan.");
-            return;
-          }
-
+          // No corrected MusicXML committed yet -- try auto-scanning this
+          // hymn's ORIGINAL high-resolution sheet music (looked up by
+          // hymn number on the local Scan2Notes server), not the small
+          // in-app display image.
           btn.innerHTML = "Scanning\u2026";
-          scanSheetMusicForXml(sheetSrc).then(function (result) {
+          scanSheetMusicForXml(h.number).then(function (result) {
             btn.disabled = false;
             btn.innerHTML = original;
             if (result && result.xmlText) {

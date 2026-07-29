@@ -4,6 +4,14 @@
 //   -> runs Audiveris in batch mode on the uploaded image/PDF
 //   -> returns a URL to the exported MusicXML
 //
+// POST /api/scan-by-number/:number
+//   -> looks up <number>.pdf directly in ORIGINAL_SHEETS_DIR (the
+//      original high-resolution scans, not the small in-app display
+//      images) and runs the same pipeline on it -- used by the Hymnal
+//      App's "Edit Tune" auto-scan so it doesn't have to upload
+//      anything, and gets a properly high-DPI source instead of the
+//      low-res image the app displays.
+//
 // This is deliberately synchronous/single-request for clarity. A real
 // deployment should make this a queued job (Audiveris takes anywhere
 // from a few seconds to over a minute per page) with the client polling
@@ -32,6 +40,13 @@ const app = express();
 // folder, these won't already exist on first run.
 fs.mkdirSync(path.join(__dirname, "uploads"), { recursive: true });
 fs.mkdirSync(path.join(__dirname, "output"), { recursive: true });
+
+// Where the original high-resolution hymn scans live, named "<number>.pdf"
+// (e.g. "47.pdf"). Overridable via env var; defaults to this machine's
+// known location.
+const ORIGINAL_SHEETS_DIR =
+  process.env.ORIGINAL_SHEETS_DIR ||
+  "D:\\JBW Consult Dropbox\\Jared Massie\\Hymns\\Individual Hymns";
 
 // Allow the Hymnal App (served from a different origin -- a local
 // Electron shell, GitHub Pages/Cloudflare, or opened as a file://
@@ -217,23 +232,77 @@ async function runCommand(bin, args, isWindows, timeoutMs = 5 * 60 * 1000) {
   return execFile(bin, args, { timeout: timeoutMs, maxBuffer: 20 * 1024 * 1024 });
 }
 
-app.post("/api/scan", upload.single("sheet"), async (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: "No file uploaded (field name must be 'sheet')" });
-  }
+// Audiveris sometimes misreads header/credit text (e.g. an author's
+// birth-death years in parentheses, like "T.Clausnitzer (1663)") as a
+// tempo/metronome marking, and its own export step can produce a
+// broken, incomplete <metronome> element when that misdetection fails
+// internally (seen in practice: a NullPointerException in Audiveris's
+// own PartwiseBuilder, exporting anyway with the bad data left in).
+// OSMD's renderer then crashes trying to draw that broken element.
+//
+// We never want Audiveris's guessed tempo anyway (that's exactly why
+// the UI has a manual Tempo field — printed hymns essentially never
+// have a reliable printed metronome mark), so unconditionally
+// stripping every metronome direction — malformed or not — from the
+// exported file avoids this whole class of crash rather than treating
+// it as one bug to patch.
+function stripMetronomeDirections(xml) {
+  return xml.replace(/<direction\b[^>]*>[\s\S]*?<metronome\b[\s\S]*?<\/direction>/gi, "");
+}
 
-  const originalInputPath = path.resolve(req.file.path);
-  const jobId = req.file.filename;
+// Some of these scans come from webpage screenshots, and Audiveris can
+// misattach page-footer text (a URL, in a real case seen here) to a
+// note as a bogus extra "verse" of lyrics — found by directly
+// inspecting an actual failing export: a <lyric> block with an
+// absurd default-y offset (-773, vs. -75 to -135 for the real verses)
+// containing a full URL as if it were one sung syllable. A real lyric
+// syllable never contains "://" or spans an entire URL with no
+// spaces, so this is a safe, targeted removal rather than a guess.
+function stripUrlLyrics(xml) {
+  return xml.replace(
+    /<lyric\b[^>]*>(?:(?!<\/lyric>)[\s\S])*?<text>[^<]*(?:https?:\/\/|www\.)[^<]*<\/text>[\s\S]*?<\/lyric>/gi,
+    ""
+  );
+}
+
+const findFileByExt = (dir, extensions) => {
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      const found = findFileByExt(full, extensions);
+      if (found) return found;
+    } else if (extensions.some((ext) => entry.name.endsWith(ext))) {
+      return full;
+    }
+  }
+  return null;
+};
+
+// Runs the full OMR pipeline (optional PDF preprocessing -> Audiveris ->
+// MusicXML cleanup) on a single input file already sitting somewhere
+// this process can freely read/write around (its own uploads/ folder,
+// specifically -- never point this at a file living in a Dropbox-synced
+// folder directly, since preprocessPdf writes and deletes temp files
+// next to its input and Dropbox-synced folders have repeatedly refused
+// to let this project delete files from JS/git alike).
+//
+// Returns { ok: true, jobId, musicxmlUrl, omrProjectPath } on success,
+// or { ok: false, statusCode, error, detail?, filesFound? } on failure.
+async function runOmrPipeline(inputPath, jobId, { deleteInputAfter }) {
   const outDir = path.resolve(__dirname, "output", jobId);
   fs.mkdirSync(outDir, { recursive: true });
 
   const isWindows = process.platform === "win32";
 
-  // --- PDF preprocessing: rasterize, fix contrast, rebuild with a sane
-  // page size (see preprocessPdf above for why all three matter) ---
   let preprocessedPath = null;
-  if (path.extname(originalInputPath).toLowerCase() === ".pdf") {
-    preprocessedPath = await preprocessPdf(originalInputPath, path.dirname(originalInputPath), isWindows);
+  if (path.extname(inputPath).toLowerCase() === ".pdf") {
+    preprocessedPath = await preprocessPdf(inputPath, path.dirname(inputPath), isWindows);
     if (preprocessedPath) {
       console.log(`Preprocessed PDF (contrast + page-size fix): ${preprocessedPath}`);
     } else {
@@ -243,7 +312,7 @@ app.post("/api/scan", upload.single("sheet"), async (req, res) => {
     }
   }
 
-  const audiverisInputPath = preprocessedPath || originalInputPath;
+  const audiverisInputPath = preprocessedPath || inputPath;
 
   // Audiveris ships in (at least) two different install layouts:
   //   - Newer jpackage-based installers: a single Audiveris.exe sits
@@ -263,27 +332,6 @@ app.post("/api/scan", upload.single("sheet"), async (req, res) => {
     audiverisBin = isWindows ? "Audiveris.exe" : "audiveris";
   }
 
-  // Safety-net overrides only — the actual fixes (contrast, page size)
-  // now happen upstream in preprocessPdf. These are Audiveris's own
-  // configurable "application constants"
-  // (`-constant KEY=VALUE`, equivalent to the GUI's Tools > Constants):
-  //   - LoadStep.maxPixelCount: default 20,000,000 — the "Too large
-  //     image" rejection. Backstop for image uploads (jpg/png, which
-  //     preprocessPdf doesn't touch) and for PDFs if preprocessing above
-  //     wasn't available.
-  //   - Main.sheetStepTimeOut: default 120 seconds — how long any single
-  //     step may run. Large images are usually why a step needs more
-  //     than 120 seconds, so this tends to matter alongside the
-  //     pixel-count backstop.
-  //
-  // Note: earlier attempts also overrode AdaptiveDescriptor's
-  // binarization coefficients directly (pushing Audiveris to treat
-  // fainter pixels as ink). That made results worse, not better — it
-  // likely picked up background noise as false ink and disrupted
-  // staff-line detection. Fixing contrast upstream on the actual pixels
-  // (preprocessPdf) proved to be the correct approach when tested
-  // against a real faint scan, so Audiveris's own binarization defaults
-  // are left alone here.
   const MAX_PIXEL_COUNT = 250_000_000;
   const STEP_TIMEOUT_SECONDS = 600; // 10 minutes per step
 
@@ -303,57 +351,28 @@ app.post("/api/scan", upload.single("sheet"), async (req, res) => {
   ];
 
   const cleanup = () => {
-    fs.unlink(originalInputPath, () => {});
+    if (deleteInputAfter) fs.unlink(inputPath, () => {});
     if (preprocessedPath) fs.unlink(preprocessedPath, () => {});
   };
 
   try {
     const { stdout, stderr } = await runCommand(audiverisBin, args, isWindows, 20 * 60 * 1000);
-    // Always log what Audiveris said — useful while getting this
-    // running, even on the "success" path (exit code 0 doesn't
-    // guarantee useful output).
     if (stdout) console.log("Audiveris stdout:\n", stdout);
     if (stderr) console.log("Audiveris stderr:\n", stderr);
   } catch (err) {
     cleanup();
-    // Audiveris's actual diagnostic detail (the INFO/WARN trace showing
-    // which step failed) comes through on stdout, not stderr — log both,
-    // since stderr alone is often empty and unhelpful on its own.
     if (err.stdout) console.error("Audiveris stdout:\n", err.stdout);
     if (err.stderr) console.error("Audiveris stderr:\n", err.stderr);
     console.error("Audiveris failed:", err.message);
-    return res.status(500).json({
+    return {
+      ok: false,
+      statusCode: 500,
       error: "OMR processing failed",
       detail: (err.stdout || err.stderr || err.message || "").slice(0, 4000),
-    });
+    };
   }
 
   cleanup();
-
-  // Audiveris (recent versions) typically creates a subfolder named
-  // after the input file's book/title inside -output, rather than
-  // writing output files directly into it — so search recursively.
-  // Used for both the MusicXML export and the .omr project file (the
-  // editable project — useful for correcting recognition errors in the
-  // GUI rather than just batch mode).
-  const findFileByExt = (dir, extensions) => {
-    let entries;
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return null;
-    }
-    for (const entry of entries) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        const found = findFileByExt(full, extensions);
-        if (found) return found;
-      } else if (extensions.some((ext) => entry.name.endsWith(ext))) {
-        return full;
-      }
-    }
-    return null;
-  };
 
   const xmlFilePath = findFileByExt(outDir, [".mxl", ".xml"]);
   const omrFilePath = findFileByExt(outDir, [".omr"]);
@@ -365,49 +384,18 @@ app.post("/api/scan", upload.single("sheet"), async (req, res) => {
     } catch {
       /* outDir may not exist at all if Audiveris failed silently */
     }
-    return res.status(500).json({
+    return {
+      ok: false,
+      statusCode: 500,
       error: "Audiveris ran but produced no MusicXML output",
       filesFound: allFiles,
-    });
-  }
-
-  // Audiveris sometimes misreads header/credit text (e.g. an author's
-  // birth-death years in parentheses, like "T.Clausnitzer (1663)") as a
-  // tempo/metronome marking, and its own export step can produce a
-  // broken, incomplete <metronome> element when that misdetection fails
-  // internally (seen in practice: a NullPointerException in Audiveris's
-  // own PartwiseBuilder, exporting anyway with the bad data left in).
-  // OSMD's renderer then crashes trying to draw that broken element.
-  //
-  // We never want Audiveris's guessed tempo anyway (that's exactly why
-  // the UI has a manual Tempo field — printed hymns essentially never
-  // have a reliable printed metronome mark), so unconditionally
-  // stripping every metronome direction — malformed or not — from the
-  // exported file avoids this whole class of crash rather than treating
-  // it as one bug to patch.
-  function stripMetronomeDirections(xml) {
-    return xml.replace(/<direction\b[^>]*>[\s\S]*?<metronome\b[\s\S]*?<\/direction>/gi, "");
-  }
-
-  // Some of these scans come from webpage screenshots, and Audiveris can
-  // misattach page-footer text (a URL, in a real case seen here) to a
-  // note as a bogus extra "verse" of lyrics — found by directly
-  // inspecting an actual failing export: a <lyric> block with an
-  // absurd default-y offset (-773, vs. -75 to -135 for the real verses)
-  // containing a full URL as if it were one sung syllable. A real lyric
-  // syllable never contains "://" or spans an entire URL with no
-  // spaces, so this is a safe, targeted removal rather than a guess.
-  function stripUrlLyrics(xml) {
-    return xml.replace(
-      /<lyric\b[^>]*>(?:(?!<\/lyric>)[\s\S])*?<text>[^<]*(?:https?:\/\/|www\.)[^<]*<\/text>[\s\S]*?<\/lyric>/gi,
-      ""
-    );
+    };
   }
 
   let cleanedRelativePath = null;
   try {
     let xmlText;
-    let isCompressed = xmlFilePath.toLowerCase().endsWith(".mxl");
+    const isCompressed = xmlFilePath.toLowerCase().endsWith(".mxl");
 
     if (isCompressed) {
       const zip = new AdmZip(xmlFilePath);
@@ -433,25 +421,76 @@ app.post("/api/scan", upload.single("sheet"), async (req, res) => {
         (beforeLength === afterLength ? " (nothing matched/removed)" : ` (removed ${beforeLength - afterLength} chars)`)
     );
   } catch (err) {
-    // If cleaning fails for any reason, fall back to serving Audiveris's
-    // original export as-is rather than blocking the whole scan on this
-    // being a nice-to-have safety pass.
     console.warn("Could not clean MusicXML (serving original export instead):", err.message);
   }
 
-  // Build a URL relative to the /output static mount, preserving
-  // whatever subfolder structure Audiveris created.
   const relativePath = cleanedRelativePath || path.relative(outDir, xmlFilePath).split(path.sep).join("/");
 
-  res.json({
+  return {
+    ok: true,
     jobId,
     musicxmlUrl: `/output/${jobId}/${relativePath}`,
-    // Absolute filesystem path — this app and Audiveris run on the same
-    // machine, so the browser can display it directly for the user to
-    // open in the Audiveris GUI (correcting recognition errors there,
-    // then re-exporting) rather than hunting through output folders.
     omrProjectPath: omrFilePath,
+  };
+}
+
+function sendPipelineResult(res, result) {
+  if (!result.ok) {
+    return res.status(result.statusCode || 500).json({
+      error: result.error,
+      detail: result.detail,
+      filesFound: result.filesFound,
+    });
+  }
+  res.json({
+    jobId: result.jobId,
+    musicxmlUrl: result.musicxmlUrl,
+    omrProjectPath: result.omrProjectPath,
   });
+}
+
+app.post("/api/scan", upload.single("sheet"), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: "No file uploaded (field name must be 'sheet')" });
+  }
+  const inputPath = path.resolve(req.file.path);
+  const jobId = req.file.filename;
+  const result = await runOmrPipeline(inputPath, jobId, { deleteInputAfter: true });
+  sendPipelineResult(res, result);
+});
+
+// Scans a hymn's ORIGINAL high-resolution sheet music by number, rather
+// than whatever low-res image the app happens to display. Copies the
+// original into our own uploads/ folder first rather than operating on
+// it in place (see runOmrPipeline's comment for why).
+app.post("/api/scan-by-number/:number", async (req, res) => {
+  const number = req.params.number;
+  if (!/^\d+$/.test(number)) {
+    return res.status(400).json({ error: "Hymn number must be numeric" });
+  }
+
+  const originalPath = path.join(ORIGINAL_SHEETS_DIR, `${number}.pdf`);
+  if (!fs.existsSync(originalPath)) {
+    return res.status(404).json({
+      error: `No original sheet music PDF found for hymn ${number}`,
+      detail: `Looked for: ${originalPath}`,
+    });
+  }
+
+  const jobId = `${Date.now()}-hymn${number}${path.extname(originalPath)}`;
+  const workingCopyPath = path.join(__dirname, "uploads", jobId);
+
+  try {
+    fs.copyFileSync(originalPath, workingCopyPath);
+  } catch (err) {
+    return res.status(500).json({
+      error: "Could not copy the original sheet music for processing",
+      detail: err.message,
+    });
+  }
+
+  const result = await runOmrPipeline(workingCopyPath, jobId, { deleteInputAfter: true });
+  sendPipelineResult(res, result);
 });
 
 const PORT = process.env.PORT || 3000;
