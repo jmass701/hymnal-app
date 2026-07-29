@@ -1,0 +1,56 @@
+name: Regenerate Hymn Audio & Sheet Music
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'musicxml/**.xml'
+      - 'musicxml/**.musicxml'
+      - 'musicxml/**.mxl'
+  workflow_dispatch: {}
+
+jobs:
+  regenerate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo (with LFS audio/images)
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install MuseScore 4 (headless AppImage + Xvfb)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libnss3 libxcomposite1 libxrandr2 \
+            libxtst6 libegl1 libopengl0 fuse libfuse2
+          curl -L -o musescore.AppImage \
+            https://cdn.jsdelivr.net/musescore/v4.4.0/MuseScore-Studio-4.4.0.242501142201-x86_64.AppImage
+          chmod +x musescore.AppImage
+          ./musescore.AppImage --appimage-extract
+          echo "$(pwd)/squashfs-root/usr/bin" >> "$GITHUB_PATH"
+          sudo ln -sf "$(pwd)/squashfs-root/AppRun" /usr/local/bin/musescore4
+
+      - name: Regenerate media from MusicXML
+        env:
+          MUSESCORE_BIN: xvfb-run
+        run: |
+          # Wrap MuseScore calls in xvfb-run since it needs a display even
+          # in "headless" CLI mode. We do this by pointing the script at a
+          # tiny wrapper script instead of the raw binary.
+          cat > /usr/local/bin/mscore-headless <<'EOF'
+          #!/bin/bash
+          xvfb-run -a musescore4 "$@"
+          EOF
+          chmod +x /usr/local/bin/mscore-headless
+          MUSESCORE_BIN=mscore-headless node scripts/regenerate-media.mjs
+
+      - name: Commit regenerated audio & images
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Regenerate audio/sheet music from updated MusicXML"
+          file_pattern: 'audio/*.mp3 images/*.png'
