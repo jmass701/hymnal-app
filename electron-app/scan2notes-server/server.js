@@ -42,11 +42,35 @@ fs.mkdirSync(path.join(__dirname, "uploads"), { recursive: true });
 fs.mkdirSync(path.join(__dirname, "output"), { recursive: true });
 
 // Where the original high-resolution hymn scans live, named "<number>.pdf"
-// (e.g. "47.pdf"). Overridable via env var; defaults to this machine's
-// known location.
-const ORIGINAL_SHEETS_DIR =
-  process.env.ORIGINAL_SHEETS_DIR ||
-  "D:\\JBW Consult Dropbox\\Jared Massie\\Hymns\\Individual Hymns";
+// or "<number>.png" (e.g. "47.pdf"). Checked in priority order -- the
+// first one found for a given hymn wins. "Individual Hymns" is the
+// higher-quality source (~400 DPI) but has a handful of gaps; "Original
+// Sheets" covers those gaps (mostly ~200 DPI, still well above the
+// low-res in-app display images). Overridable via env var (comma-
+// separated list, highest priority first) for portability.
+const ORIGINAL_SHEETS_DIRS = (
+  process.env.ORIGINAL_SHEETS_DIRS
+    ? process.env.ORIGINAL_SHEETS_DIRS.split(",")
+    : [
+        "D:\\JBW Consult Dropbox\\Jared Massie\\Hymns\\Individual Hymns",
+        "D:\\JBW Consult Dropbox\\Jared Massie\\Hymns\\Original Sheets",
+      ]
+).map((s) => s.trim());
+
+const SHEET_EXTENSIONS = [".pdf", ".png", ".jpg", ".jpeg"];
+
+// Finds the best available original scan for a hymn number, checking
+// each directory in priority order and each extension within it.
+// Returns the full path, or null if nothing matches anywhere.
+function findOriginalSheet(number) {
+  for (const dir of ORIGINAL_SHEETS_DIRS) {
+    for (const ext of SHEET_EXTENSIONS) {
+      const candidate = path.join(dir, `${number}${ext}`);
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  }
+  return null;
+}
 
 // Allow the Hymnal App (served from a different origin -- a local
 // Electron shell, GitHub Pages/Cloudflare, or opened as a file://
@@ -469,11 +493,11 @@ app.post("/api/scan-by-number/:number", async (req, res) => {
     return res.status(400).json({ error: "Hymn number must be numeric" });
   }
 
-  const originalPath = path.join(ORIGINAL_SHEETS_DIR, `${number}.pdf`);
-  if (!fs.existsSync(originalPath)) {
+  const originalPath = findOriginalSheet(number);
+  if (!originalPath) {
     return res.status(404).json({
-      error: `No original sheet music PDF found for hymn ${number}`,
-      detail: `Looked for: ${originalPath}`,
+      error: `No original sheet music found for hymn ${number}`,
+      detail: `Looked in: ${ORIGINAL_SHEETS_DIRS.join(", ")}`,
     });
   }
 
