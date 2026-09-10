@@ -10,6 +10,10 @@
   var searchWrap = document.getElementById("searchWrap");
   var tabAll = document.getElementById("tabAll");
   var tabJump = document.getElementById("tabJump");
+  var sheetZoomOverlay = document.getElementById("sheetZoomOverlay");
+  var sheetZoomStage = document.getElementById("sheetZoomStage");
+  var sheetZoomImg = document.getElementById("sheetZoomImg");
+  var sheetZoomClose = document.getElementById("sheetZoomClose");
 
   var HYMNS = [];
   var sortedNums = [];
@@ -32,6 +36,183 @@
   function setSheetMusicHidden(val) {
     sheetMusicHiddenNow = val;
   }
+
+  // ---- Sheet music zoom viewer ----
+  // A dependency-free pinch/drag/scroll zoom viewer for sheet-music images.
+  // Opened by tapping any sheet-music <img>; closed via the close button,
+  // tapping the dark backdrop, or Escape. Zoom/pan state always resets on
+  // open, same as the tempo sliders and sheet-music-collapsed state elsewhere
+  // in this file never persisting across hymns.
+  var zoomScale = 1;
+  var zoomX = 0;
+  var zoomY = 0;
+  var ZOOM_MIN = 1;
+  var ZOOM_MAX = 5;
+
+  function applyZoomTransform() {
+    sheetZoomImg.style.transform =
+      "translate(-50%, -50%) translate(" + zoomX + "px, " + zoomY + "px) scale(" + zoomScale + ")";
+  }
+
+  function clampZoomPan() {
+    var rect = sheetZoomImg.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    var maxX = Math.max(0, (rect.width - window.innerWidth) / 2);
+    var maxY = Math.max(0, (rect.height - window.innerHeight) / 2);
+    zoomX = Math.min(maxX, Math.max(-maxX, zoomX));
+    zoomY = Math.min(maxY, Math.max(-maxY, zoomY));
+  }
+
+  // Zooms so that the point at (cx, cy) -- screen coordinates relative to
+  // the stage's center -- stays visually fixed under the cursor/finger.
+  function zoomAt(cx, cy, newScale) {
+    var oldScale = zoomScale;
+    newScale = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, newScale));
+    zoomX = cx - (newScale / oldScale) * (cx - zoomX);
+    zoomY = cy - (newScale / oldScale) * (cy - zoomY);
+    zoomScale = newScale;
+    clampZoomPan();
+    applyZoomTransform();
+  }
+
+  function toggleZoomAt(cx, cy) {
+    if (zoomScale > 1.05) {
+      zoomScale = 1;
+      zoomX = 0;
+      zoomY = 0;
+      applyZoomTransform();
+    } else {
+      zoomAt(cx, cy, 2.5);
+    }
+  }
+
+  function resetZoom() {
+    zoomScale = 1;
+    zoomX = 0;
+    zoomY = 0;
+    applyZoomTransform();
+  }
+
+  function openSheetZoom(src, alt) {
+    sheetZoomImg.src = src;
+    sheetZoomImg.alt = alt || "";
+    resetZoom();
+    sheetZoomOverlay.classList.remove("hidden");
+  }
+
+  function closeSheetZoom() {
+    sheetZoomOverlay.classList.add("hidden");
+    sheetZoomImg.src = "";
+  }
+
+  sheetZoomClose.addEventListener("click", closeSheetZoom);
+  sheetZoomOverlay.addEventListener("click", function (e) {
+    if (e.target === sheetZoomOverlay || e.target === sheetZoomStage) closeSheetZoom();
+  });
+  window.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && !sheetZoomOverlay.classList.contains("hidden")) closeSheetZoom();
+  });
+
+  // Mouse wheel / trackpad zoom (desktop).
+  sheetZoomStage.addEventListener("wheel", function (e) {
+    e.preventDefault();
+    var rect = sheetZoomStage.getBoundingClientRect();
+    var cx = e.clientX - rect.left - rect.width / 2;
+    var cy = e.clientY - rect.top - rect.height / 2;
+    zoomAt(cx, cy, zoomScale * (1 - e.deltaY * 0.01));
+  }, { passive: false });
+
+  // Double-click to toggle between fit and 2.5x, centered on the click.
+  sheetZoomStage.addEventListener("dblclick", function (e) {
+    var rect = sheetZoomStage.getBoundingClientRect();
+    toggleZoomAt(e.clientX - rect.left - rect.width / 2, e.clientY - rect.top - rect.height / 2);
+  });
+
+  // Mouse drag to pan once zoomed in.
+  var mouseDragging = false, mouseDragStartX = 0, mouseDragStartY = 0, mouseDragOrigX = 0, mouseDragOrigY = 0;
+  sheetZoomStage.addEventListener("mousedown", function (e) {
+    if (zoomScale <= 1) return;
+    mouseDragging = true;
+    mouseDragStartX = e.clientX;
+    mouseDragStartY = e.clientY;
+    mouseDragOrigX = zoomX;
+    mouseDragOrigY = zoomY;
+  });
+  window.addEventListener("mousemove", function (e) {
+    if (!mouseDragging) return;
+    zoomX = mouseDragOrigX + (e.clientX - mouseDragStartX);
+    zoomY = mouseDragOrigY + (e.clientY - mouseDragStartY);
+    clampZoomPan();
+    applyZoomTransform();
+  });
+  window.addEventListener("mouseup", function () { mouseDragging = false; });
+
+  // Touch: pinch to zoom, one-finger drag to pan, double-tap to toggle zoom.
+  var touchState = null;
+  var lastTapTime = 0;
+  var lastTapX = 0;
+  var lastTapY = 0;
+
+  function touchDist(t0, t1) {
+    return Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+  }
+  function touchMid(t0, t1, rect) {
+    return {
+      x: (t0.clientX + t1.clientX) / 2 - rect.left - rect.width / 2,
+      y: (t0.clientY + t1.clientY) / 2 - rect.top - rect.height / 2
+    };
+  }
+
+  sheetZoomStage.addEventListener("touchstart", function (e) {
+    var rect = sheetZoomStage.getBoundingClientRect();
+    if (e.touches.length === 2) {
+      touchState = {
+        mode: "pinch",
+        startDist: touchDist(e.touches[0], e.touches[1]),
+        startScale: zoomScale,
+        mid: touchMid(e.touches[0], e.touches[1], rect),
+        startX: zoomX,
+        startY: zoomY
+      };
+      return;
+    }
+    if (e.touches.length === 1) {
+      var t = e.touches[0];
+      var now = Date.now();
+      if (now - lastTapTime < 320 && Math.hypot(t.clientX - lastTapX, t.clientY - lastTapY) < 30) {
+        toggleZoomAt(t.clientX - rect.left - rect.width / 2, t.clientY - rect.top - rect.height / 2);
+        lastTapTime = 0;
+        touchState = null;
+        return;
+      }
+      lastTapTime = now;
+      lastTapX = t.clientX;
+      lastTapY = t.clientY;
+      touchState = { mode: "drag", startX: t.clientX, startY: t.clientY, origX: zoomX, origY: zoomY };
+    }
+  }, { passive: true });
+
+  sheetZoomStage.addEventListener("touchmove", function (e) {
+    if (!touchState) return;
+    e.preventDefault();
+    if (touchState.mode === "pinch" && e.touches.length === 2) {
+      var ratio = touchDist(e.touches[0], e.touches[1]) / touchState.startDist;
+      zoomScale = touchState.startScale;
+      zoomX = touchState.startX;
+      zoomY = touchState.startY;
+      zoomAt(touchState.mid.x, touchState.mid.y, touchState.startScale * ratio);
+    } else if (touchState.mode === "drag" && e.touches.length === 1) {
+      var t = e.touches[0];
+      zoomX = touchState.origX + (t.clientX - touchState.startX);
+      zoomY = touchState.origY + (t.clientY - touchState.startY);
+      clampZoomPan();
+      applyZoomTransform();
+    }
+  }, { passive: false });
+
+  sheetZoomStage.addEventListener("touchend", function (e) {
+    if (e.touches.length === 0) touchState = null;
+  });
 
   function escapeHtml(s) {
     return (s || "").replace(/[&<>"']/g, function (c) {
@@ -314,6 +495,12 @@
         var pct = parseInt(slider.value, 10);
         audioEl.playbackRate = pct / 100;
         if (valueLabel) valueLabel.textContent = pct + "%";
+      });
+    });
+
+    detailView.querySelectorAll(".sheet-music img").forEach(function (img) {
+      img.addEventListener("click", function () {
+        openSheetZoom(img.src, img.alt);
       });
     });
 

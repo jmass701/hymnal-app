@@ -1,4 +1,4 @@
-const CACHE_NAME = "hymnal-cache-v15";
+const CACHE_NAME = "hymnal-cache-v16";
 // Core app shell only. Sheet-music images (283+ files) are cached on demand
 // as the user views them, via the fetch handler below, rather than being
 // precached at install time.
