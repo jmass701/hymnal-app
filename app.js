@@ -15,6 +15,13 @@
   var sortedNums = [];
   var mode = "all"; // 'all' | 'jump' | 'search'
 
+  // The mobile (Android) build sets window.EDIT_TUNE_ENABLED = false before
+  // this script loads, since it ships without voice audio or the bundled
+  // Scan2Notes server -- there's nothing for Edit Tune to do there. Every
+  // other build (desktop/Electron, plain browser/PWA) leaves the flag
+  // unset, which defaults to enabled.
+  var EDIT_TUNE_ENABLED = window.EDIT_TUNE_ENABLED !== false;
+
   // Sheet music visibility is intentionally NOT persisted: every time the
   // user opens a hymn (including re-opening the same one after navigating
   // away), it should start collapsed again.
@@ -121,6 +128,44 @@
     setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
   }
 
+  // Opens a MusicXML file in whatever program is registered to handle it
+  // (e.g. MuseScore) instead of just downloading it. Only possible inside
+  // the Electron desktop app, which exposes window.electronAPI via a
+  // preload script -- a plain browser has no way to launch a desktop
+  // program, so this falls back to a normal download there.
+  function openMusicXmlExternally(text, filename) {
+    if (window.electronAPI && typeof window.electronAPI.openMusicXml === "function") {
+      return window.electronAPI.openMusicXml(text, filename).then(function (result) {
+        if (!result || !result.ok) {
+          // Couldn't launch an external editor (e.g. nothing registered
+          // for this file type) -- fall back to a normal download so the
+          // user still gets the file.
+          downloadText(text, filename);
+        }
+      }).catch(function () {
+        downloadText(text, filename);
+      });
+    }
+    downloadText(text, filename);
+    return Promise.resolve();
+  }
+
+  // For a MusicXML file that's already committed to the repo (served as a
+  // normal static file), fetch its text and route it through the same
+  // "open externally, else download" helper used for freshly-scanned XML.
+  function openCommittedMusicXml(path) {
+    var filename = path.split("/").pop();
+    return fetch(encodeURI(path)).then(function (res) {
+      if (!res.ok) throw new Error("Couldn't retrieve " + path);
+      return res.text();
+    }).then(function (text) {
+      return openMusicXmlExternally(text, filename);
+    }).catch(function () {
+      // Fall back to a plain download if the fetch itself failed.
+      downloadFromUrl(encodeURI(path), filename);
+    });
+  }
+
   // Local Scan2Notes server (Audiveris OMR) -- only reachable when the
   // user has it running on their own machine via start.bat. Not part of
   // the deployed static app; this is a best-effort convenience call.
@@ -185,7 +230,8 @@
         '<div class="audio-block">' +
         h.audio.map(function (src, i) {
           var label;
-          if (src.indexOf("organ_") !== -1) {
+          var isOrgan = src.indexOf("organ_") !== -1;
+          if (isOrgan) {
             label = "Organ";
           } else if (src.indexOf("_2.mp3") !== -1) {
             label = "Multi Voice";
@@ -197,8 +243,15 @@
           return (
             '<div class="audio-row">' +
               '<div class="audio-label">' + label + "</div>" +
-              '<audio controls preload="none" src="' + encodeURI(src) + '"></audio>' +
-              (src.indexOf("organ_") !== -1 ? '<button class="edit-tune-btn" data-audio="' + encodeURI(src) + '" title="Edit tune (MusicXML)">&#9998; <span>Edit tune</span></button>' : "") +
+              '<audio controls preload="none" id="audioTrack' + i + '" src="' + encodeURI(src) + '"></audio>' +
+              (isOrgan ?
+                '<div class="tempo-row">' +
+                  '<label for="tempoSlider' + i + '">Tempo</label>' +
+                  '<input type="range" id="tempoSlider' + i + '" data-audio-target="audioTrack' + i + '" min="70" max="130" step="1" value="100">' +
+                  '<span class="tempo-value" id="tempoValue' + i + '">100%</span>' +
+                "</div>"
+                : "") +
+              (EDIT_TUNE_ENABLED && isOrgan ? '<button class="edit-tune-btn" data-audio="' + encodeURI(src) + '" title="Edit tune (MusicXML)">&#9998; <span>Edit tune</span></button>' : "") +
             "</div>"
           );
         }).join("") +
@@ -248,6 +301,22 @@
       if (nextNum !== null) btn.addEventListener("click", function () { showDetail(nextNum); });
     });
 
+    // Tempo sliders control playbackRate on their associated organ <audio>
+    // element only. They are never persisted: showDetail() always rebuilds
+    // this markup fresh with value="100", so re-opening a hymn (or
+    // navigating to a different one) resets the tempo to normal.
+    detailView.querySelectorAll(".tempo-row input[type=\"range\"]").forEach(function (slider) {
+      var audioEl = document.getElementById(slider.getAttribute("data-audio-target"));
+      var valueLabel = document.getElementById("tempoValue" + slider.id.replace("tempoSlider", ""));
+      if (!audioEl) return;
+      audioEl.playbackRate = 1;
+      slider.addEventListener("input", function () {
+        var pct = parseInt(slider.value, 10);
+        audioEl.playbackRate = pct / 100;
+        if (valueLabel) valueLabel.textContent = pct + "%";
+      });
+    });
+
     var toggleBtn = document.getElementById("sheetToggleBtn");
     if (toggleBtn) {
       toggleBtn.addEventListener("click", function () {
@@ -260,7 +329,7 @@
       });
     }
 
-    detailView.querySelectorAll(".edit-tune-btn").forEach(function (btn) {
+    if (EDIT_TUNE_ENABLED) detailView.querySelectorAll(".edit-tune-btn").forEach(function (btn) {
       btn.addEventListener("click", function () {
         var audioSrc = decodeURI(btn.getAttribute("data-audio"));
         var base = xmlBaseForAudio(audioSrc);
@@ -270,10 +339,10 @@
 
         findMusicXmlPath(base).then(function (path) {
           if (path) {
-            btn.disabled = false;
-            btn.innerHTML = original;
-            downloadFromUrl(encodeURI(path), path.split("/").pop());
-            return;
+            return openCommittedMusicXml(path).then(function () {
+              btn.disabled = false;
+              btn.innerHTML = original;
+            });
           }
 
           // No corrected MusicXML committed yet -- try auto-scanning this
@@ -281,12 +350,15 @@
           // hymn number on the local Scan2Notes server), not the small
           // in-app display image.
           btn.innerHTML = "Scanning\u2026";
-          scanSheetMusicForXml(h.number).then(function (result) {
-            btn.disabled = false;
-            btn.innerHTML = original;
+          return scanSheetMusicForXml(h.number).then(function (result) {
             if (result && result.xmlText) {
-              downloadText(result.xmlText, base + ".musicxml");
+              return openMusicXmlExternally(result.xmlText, base + ".musicxml").then(function () {
+                btn.disabled = false;
+                btn.innerHTML = original;
+              });
             } else {
+              btn.disabled = false;
+              btn.innerHTML = original;
               alert(
                 "Couldn't auto-scan this hymn's sheet music.\n\n" +
                 (result && result.error ? result.error + "\n\n" : "") +

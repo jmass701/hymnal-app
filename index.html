@@ -167,6 +167,30 @@
   .edit-tune-btn:hover { text-decoration: underline; }
   .edit-tune-btn:disabled { opacity: 0.5; cursor: default; }
 
+  .tempo-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 4px;
+  }
+  .tempo-row label {
+    font-size: 0.75rem;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .tempo-row input[type="range"] {
+    flex: 1 1 auto;
+    accent-color: var(--accent);
+  }
+  .tempo-row .tempo-value {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--accent);
+    min-width: 40px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
   .sheet-toggle-row { margin-bottom: 10px; }
   .sheet-toggle-btn {
     display: inline-flex;
